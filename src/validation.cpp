@@ -1329,10 +1329,9 @@ void UpdateCoins(const CTransaction& tx, CCoinsViewCache& inputs, int nHeight)
 bool CScriptCheck::operator()() {
     const CScript &scriptSig = ptxTo->vin[nIn].scriptSig;
     const CScriptWitness *witness = &ptxTo->vin[nIn].scriptWitness;
-    if (!VerifyScript(scriptSig, scriptPubKey, witness, nFlags, CachingTransactionSignatureChecker(ptxTo, nIn, amount, cacheStore, *txdata), &error)) {
-        return false;
-    }
-    return true;
+    bool result = VerifyScript(scriptSig, scriptPubKey, witness, nFlags, CachingTransactionSignatureChecker(ptxTo, nIn, amount, cacheStore, *txdata), &error);
+    scriptPubKey.clear();
+    return result;
 }
 
 int GetSpendHeight(const CCoinsViewCache& inputs)
@@ -1655,6 +1654,12 @@ static CCheckQueue<CScriptCheck> scriptcheckqueue(128);
 void ThreadScriptCheck() {
     RenameThread("bitcoin-scriptch");
     scriptcheckqueue.Thread();
+}
+void InterruptCheckQueue() {
+    scriptcheckqueue.Interrupt();
+}
+void StopCheckQueue() {
+    scriptcheckqueue.Stop();
 }
 
 // Protected by cs_main

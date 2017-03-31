@@ -174,6 +174,7 @@ void Interrupt(boost::thread_group& threadGroup)
     if (g_connman)
         g_connman->Interrupt();
     threadGroup.interrupt_all();
+    InterruptCheckQueue();
 }
 
 void Shutdown()
@@ -195,6 +196,7 @@ void Shutdown()
     StopREST();
     StopRPC();
     StopHTTPServer();
+    StopCheckQueue();
 #ifdef ENABLE_WALLET
     if (pwalletMain)
         pwalletMain->Flush(false);
@@ -1188,7 +1190,7 @@ bool AppInitMain(boost::thread_group& threadGroup, CScheduler& scheduler)
     LogPrintf("Using %u threads for script verification\n", nScriptCheckThreads);
     if (nScriptCheckThreads) {
         for (int i=0; i<nScriptCheckThreads-1; i++)
-            threadGroup.create_thread(&ThreadScriptCheck);
+            ThreadScriptCheck();
     }
 
     // Start the lightweight task scheduler thread

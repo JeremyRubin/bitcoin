@@ -16,6 +16,7 @@
 #include "txdb.h"
 #include "txmempool.h"
 #include "ui_interface.h"
+#include "util.h"
 #include "rpc/server.h"
 #include "rpc/register.h"
 #include "script/sigcache.h"
@@ -41,6 +42,7 @@ BasicTestingSetup::BasicTestingSetup(const std::string& chainName)
         fPrintToDebugLog = false; // don't want to write to debug.log file
         fCheckBlockIndex = true;
         SelectParams(chainName);
+        nScriptCheckThreads = std::max(3, GetNumCores());
         noui_connect();
 }
 
@@ -76,7 +78,7 @@ TestingSetup::TestingSetup(const std::string& chainName) : BasicTestingSetup(cha
         }
         nScriptCheckThreads = 3;
         for (int i=0; i < nScriptCheckThreads-1; i++)
-            threadGroup.create_thread(&ThreadScriptCheck);
+            ThreadScriptCheck();
         g_connman = std::unique_ptr<CConnman>(new CConnman(0x1337, 0x1337)); // Deterministic randomness for tests.
         connman = g_connman.get();
         RegisterNodeSignals(GetNodeSignals());
@@ -87,6 +89,8 @@ TestingSetup::~TestingSetup()
         UnregisterNodeSignals(GetNodeSignals());
         threadGroup.interrupt_all();
         threadGroup.join_all();
+        InterruptCheckQueue();
+        StopCheckQueue();
         UnloadBlockIndex();
         delete pcoinsTip;
         delete pcoinsdbview;

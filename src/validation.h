@@ -273,8 +273,12 @@ bool InitBlockIndex(const CChainParams& chainparams);
 bool LoadBlockIndex(const CChainParams& chainparams);
 /** Unload database information */
 void UnloadBlockIndex();
-/** Run an instance of the script checking thread */
+/** Create an instance of the script checking thread */
 void ThreadScriptCheck();
+/** Interrupt all current script checking threads*/
+void InterruptCheckQueue();
+/** Join all current script checking threads*/
+void StopCheckQueue();
 /** Check whether we are doing an initial block download (synchronizing from disk or network) */
 bool IsInitialBlockDownload();
 /** Format a string that describes several potential problems detected by the core.
