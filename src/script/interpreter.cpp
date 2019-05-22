@@ -292,6 +292,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
     CScript::const_iterator pend = script.end();
     CScript::const_iterator pbegincodehash = script.begin();
     opcodetype opcode;
+    opcodetype prev_opcode = OP_INVALIDOPCODE;
     valtype vchPushValue;
     std::vector<bool> vfExec;
     std::vector<valtype> altstack;
@@ -774,18 +775,34 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 {
                     // Don't verify before enabled...
                     if (flags & SCRIPT_VERIFY_OUTPUTS_HASH) {
-                        CScript::const_iterator lookahead = pc;
-                        opcodetype argument;
-                        // Read ahead one opcode as a lookahead argument
-                        if (!script.GetOp(lookahead, argument, vchPushValue))
-                            return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
-                        // If lookahead argument was exactly 32 bytes, check OutputHash
+
+                        if (stack.size() < 1)
+                            return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                        // Previous executed operation must be a data push.
+                        //
+                        // NOTE:
+                        //
+                        // INVALID_STACK_OPERATION might not be appropriate error code
+                        // in this case, but this is closest thing in existing error codes.
+                        //
+                        // Making opcode behavior depend on the previous executed opcode
+                        // adds complexity to the script execution model, but the amount
+                        // of complexity added by this opcode-lookbehind mode is small,
+                        // and this is arguably better than making non-pushdata
+                        // opcodes use data lookahead, because this erodes the consistency
+                        // of the stack machine execution model. The argument here seems
+                        // to boil down to complexity vs model consistency.
+                        // Reducing consistency just externalizes the complexity outside:
+                        // to the users of the script and to the tools that operate on it.
+                        if (prev_opcode > OP_PUSHDATA4)
+                            return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                        valtype& vchHash = stacktop(-1);
+
+                        // If stack argument was exactly 32 bytes, check OutputHash
                         // This is so that we can later add different semantics for this opcode
-                        if (vchPushValue.size() == 32) {
-                            // Argument should be == 0x20 -- will fail later anyways
-                            if (!CheckMinimalPush(vchPushValue, argument)) {
-                                return set_error(serror, SCRIPT_ERR_MINIMALDATA);
-                            }
+                        if (vchHash.size() == 32) {
                             // If multiple inputs allowed, two inputs with the same OutputsHashVerify
                             // would pay only half intended amount!
                             if (!checker.CheckOnlyOneInput()) {
@@ -796,7 +813,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                                 return set_error(serror, SCRIPT_ERR_OUTPUTSHASHVERIFY);
                             }
                         }
-
+                        popstack(stack);
                     }
                 }
                 break;
@@ -1154,6 +1171,8 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
             // Size limits
             if (stack.size() + altstack.size() > MAX_STACK_SIZE)
                 return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+
+            prev_opcode = opcode;
 
             ++opcode_pos;
         }
