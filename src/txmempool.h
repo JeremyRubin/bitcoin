@@ -52,6 +52,71 @@ struct LockPoints
 
 class CTxMemPool;
 
+struct CompareIteratorByHashGeneric {
+    // SFINAE for a is a pointer or a reference
+    template<typename T>
+    bool operator()(const std::reference_wrapper<T> &a, const std::reference_wrapper<T> &b) const {
+        return a.get().GetTx().GetHash() < b.get().GetTx().GetHash();
+    }
+    template<typename T>
+    bool operator()(const T &a, const T &b) const {
+        return a->GetTx().GetHash() < b->GetTx().GetHash();
+    }
+};
+
+struct EqualIteratorByHash {
+    // SFINAE for a is a pointer or a reference
+    template<typename T>
+    bool operator()(const std::reference_wrapper<T> &a, const std::reference_wrapper<T> &b) const {
+        return a.get().GetTx().GetHash() == b.get().GetTx().GetHash();
+    }
+    template<typename T>
+    bool operator()(const T &a, const T &b) const {
+        return a->GetTx().GetHash() == b->GetTx().GetHash();
+    }
+};
+
+class SaltedUInt32Hasher
+{
+private:
+    uint64_t a;
+public:
+    SaltedUInt32Hasher();
+    // the std::hash<uint32_t> returns
+    // the integer itself, so it's fine that
+    // we're up-casting a uint32_t here
+    size_t operator()(const uint32_t x) const {
+        return HalfSipHashUint32(a,x);
+    }
+};
+
+class SaltedTxidHasher
+{
+private:
+    /** Salt */
+    mutable uint64_t k0, k1;
+public:
+    SaltedTxidHasher();
+
+    size_t operator()(const uint256& txid) const {
+        return SipHashUint256(k0, k1, txid);
+    }
+    template<typename T>
+    size_t operator()(const std::reference_wrapper<T>& it) const {
+        return SipHashUint256(k0, k1, it.get().GetTx().GetHash());
+    }
+    template<typename It>
+    size_t operator()(const It& it) const {
+        return SipHashUint256(k0, k1, it->GetTx().GetHash());
+    }
+
+    // allows swapping tables
+    friend void swap(SaltedTxidHasher& a, SaltedTxidHasher& b) {
+        std::swap(a.k0, b.k0);
+        std::swap(a.k1, b.k1);
+    }
+};
+
 /** \class CTxMemPoolEntry
  *
  * CTxMemPoolEntry stores data about the corresponding transaction, as well
@@ -66,8 +131,14 @@ class CTxMemPool;
 
 class CTxMemPoolEntry
 {
+public:
+    typedef std::reference_wrapper<const CTxMemPoolEntry> CTxMemPoolEntryRef;
+    typedef std::unordered_set<CTxMemPoolEntryRef, SaltedTxidHasher, EqualIteratorByHash> relatives;
 private:
     const CTransactionRef tx;
+    mutable relatives parents;
+    mutable relatives children;
+private:
     const CAmount nFee;             //!< Cached to avoid expensive parent-transaction lookups
     const size_t nTxWeight;         //!< ... and avoid recomputing tx weight (also used for GetTxSize())
     const size_t nUsageSize;        //!< ... and total memory usage
@@ -129,6 +200,11 @@ public:
     uint64_t GetSizeWithAncestors() const { return nSizeWithAncestors; }
     CAmount GetModFeesWithAncestors() const { return nModFeesWithAncestors; }
     int64_t GetSigOpCostWithAncestors() const { return nSigOpCostWithAncestors; }
+
+    const relatives& GetMemPoolParentsConst() const {return parents;}
+    const relatives& GetMemPoolChildrenConst() const {return children;}
+    relatives& GetMemPoolParents() const {return parents;}
+    relatives& GetMemPoolChildren() const {return children;}
 
     mutable size_t vTxHashesIdx; //!< Index in mempool's vTxHashes
     mutable uint64_t m_epoch; //!< epoch when last touched, useful for graph algorithms
@@ -357,19 +433,6 @@ enum class MemPoolRemovalReason {
     REPLACED,    //!< Removed for replacement
 };
 
-class SaltedTxidHasher
-{
-private:
-    /** Salt */
-    const uint64_t k0, k1;
-
-public:
-    SaltedTxidHasher();
-
-    size_t operator()(const uint256& txid) const {
-        return SipHashUint256(k0, k1, txid);
-    }
-};
 
 /**
  * CTxMemPool stores valid-according-to-the-current-best-chain transactions
@@ -451,7 +514,11 @@ private:
     CBlockPolicyEstimator* minerPolicyEstimator;
 
     uint64_t totalTxSize;      //!< sum of all mempool tx's virtual sizes. Differs from serialized tx size since witness data is discounted. Defined in BIP 141.
-    uint64_t cachedInnerUsage; //!< sum of dynamic memory usage of all the map elements (NOT the maps themselves)
+    uint64_t cachedInnerUsageEntry; //!< sum of dynamic memory usage of all the parent map elements (NOT the maps themselves)
+    uint64_t cachedInnerUsageParents; //!< sum of dynamic memory usage of all the parent map elements (NOT the maps themselves)
+    uint64_t cachedInnerUsageChildren; //!< sum of dynamic memory usage of all the children map elements (NOT the maps themselves)
+    uint64_t cachedInnerUsageMapNextTx; //!< sum of dynamic memory usage of all the mapNextTx map elements (NOT the maps themselves)
+    uint64_t cachedInnerMapNextTxSize; //!< count of number of UTXOs mapped in mapNextTx
 
     mutable int64_t lastRollingFeeUpdate;
     mutable bool blockSinceLastRollingFeeBump;
@@ -526,27 +593,17 @@ public:
     using txiter = indexed_transaction_set::nth_index<0>::type::const_iterator;
     std::vector<std::pair<uint256, txiter>> vTxHashes GUARDED_BY(cs); //!< All tx witness hashes/entries in mapTx, in random order
 
-    struct CompareIteratorByHash {
-        bool operator()(const txiter &a, const txiter &b) const {
-            return a->GetTx().GetHash() < b->GetTx().GetHash();
-        }
-    };
+    typedef CompareIteratorByHashGeneric CompareIteratorByHash;
     typedef std::set<txiter, CompareIteratorByHash> setEntries;
     typedef std::vector<txiter> vecEntries;
 
-    const setEntries & GetMemPoolParents(txiter entry) const EXCLUSIVE_LOCKS_REQUIRED(cs);
-    const setEntries & GetMemPoolChildren(txiter entry) const EXCLUSIVE_LOCKS_REQUIRED(cs);
     uint64_t CalculateDescendantMaximum(txiter entry) const EXCLUSIVE_LOCKS_REQUIRED(cs);
 private:
-    typedef std::map<txiter, setEntries, CompareIteratorByHash> cacheMap;
+    uint64_t CalculateDescendantMaximumInner(std::reference_wrapper<const CTxMemPoolEntry> candidate,
+            std::vector<std::reference_wrapper<const CTxMemPoolEntry>>& candidates, uint64_t maximum, uint8_t limit) const EXCLUSIVE_LOCKS_REQUIRED(cs);
+    typedef std::unordered_map<txiter, std::vector<txiter>, SaltedTxidHasher, EqualIteratorByHash> cacheMap;
 
-    struct TxLinks {
-        setEntries parents;
-        setEntries children;
-    };
 
-    typedef std::map<txiter, TxLinks, CompareIteratorByHash> txlinksMap;
-    txlinksMap mapLinks;
 
     void UpdateParent(txiter entry, txiter parent, bool add);
     void UpdateChild(txiter entry, txiter child, bool add);
@@ -554,7 +611,9 @@ private:
     std::vector<indexed_transaction_set::const_iterator> GetSortedDepthAndScore() const EXCLUSIVE_LOCKS_REQUIRED(cs);
 
 public:
-    indirectmap<COutPoint, const CTransaction*> mapNextTx GUARDED_BY(cs);
+    // N.B.: because unordered_node<std::pair<uint32_t, txiter>> is 4 bytes then 8 bytes then 8 bytes for pointer, we end up
+    // with 24 bytes rather than 20 bytes. Perhaps these extra 4 bytes in a map are useful sometime down the line.
+    std::unordered_map<uint256, std::unordered_map<uint32_t, const txiter, SaltedUInt32Hasher>, SaltedTxidHasher> mapNextTx GUARDED_BY(cs);
     std::map<uint256, CAmount> mapDeltas;
 
     /** Create a new CTxMemPool.
@@ -604,13 +663,10 @@ public:
     void ClearPrioritisation(const uint256 hash);
 
     /** Get the transaction in the pool that spends the same prevout */
-    const CTransaction* GetConflictTx(const COutPoint& prevout) const EXCLUSIVE_LOCKS_REQUIRED(cs);
+    const Optional<txiter> GetConflictTx(const COutPoint& prevout) const EXCLUSIVE_LOCKS_REQUIRED(cs);
 
     /** Returns an iterator to the given hash, if found */
     Optional<txiter> GetIter(const uint256& txid) const EXCLUSIVE_LOCKS_REQUIRED(cs);
-
-    /** Translate a set of hashes into a set of pool iterators to avoid repeated lookups */
-    setEntries GetIterSet(const std::set<uint256>& hashes) const EXCLUSIVE_LOCKS_REQUIRED(cs);
 
     /** Remove a set of transactions from the mempool.
      *  If a transaction is in this set, then all in-mempool descendants must
@@ -727,10 +783,7 @@ private:
      */
     void UpdateForDescendants(txiter updateIt,
             cacheMap &cachedDescendants,
-            const std::set<uint256> &setExclude) EXCLUSIVE_LOCKS_REQUIRED(cs);
-    void UpdateForDescendantsInner(txiter param_it, txiter update_it, int64_t&size, CAmount& fee,
-            int64_t& count, cacheMap& cache, const std::set<uint256>& exclude, vecEntries&
-            stack, bool update_child_epochs, const uint8_t limit = 25) EXCLUSIVE_LOCKS_REQUIRED(cs);
+            const std::unordered_set<uint256, SaltedTxidHasher> &setExclude) EXCLUSIVE_LOCKS_REQUIRED(cs);
     /** Update ancestors of hash to add/remove it as a descendant transaction. */
     void UpdateAncestorsOf(bool add, txiter hash, vecEntries &ancestors) EXCLUSIVE_LOCKS_REQUIRED(cs);
     /** Set ancestor state for an entry */

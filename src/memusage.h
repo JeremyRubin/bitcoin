@@ -153,8 +153,8 @@ private:
     void* ptr;
 };
 
-template<typename X, typename Y>
-static inline size_t DynamicUsage(const std::unordered_set<X, Y>& s)
+template<typename X, typename Y, typename Z>
+static inline size_t DynamicUsage(const std::unordered_set<X, Y, Z>& s)
 {
     return MallocUsage(sizeof(unordered_node<X>)) * s.size() + MallocUsage(sizeof(void*) * s.bucket_count());
 }

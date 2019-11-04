@@ -465,7 +465,7 @@ private:
     // of checking a given transaction.
     struct Workspace {
         Workspace(const CTransactionRef& ptx) : m_ptx(ptx), m_hash(ptx->GetHash()) {}
-        std::set<uint256> m_conflicts;
+        CTxMemPool::vecEntries m_conflicts;
         CTxMemPool::vecEntries m_all_conflicting;
         CTxMemPool::vecEntries m_ancestors;
         std::unique_ptr<CTxMemPoolEntry> m_entry;
@@ -543,7 +543,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     std::vector<COutPoint>& coins_to_uncache = args.m_coins_to_uncache;
 
     // Alias what we need out of ws
-    std::set<uint256>& setConflicts = ws.m_conflicts;
+    CTxMemPool::vecEntries& conflicts = ws.m_conflicts;
     CTxMemPool::vecEntries& all_conflicting = ws.m_all_conflicting;
     CTxMemPool::vecEntries& ancestors = ws.m_ancestors;
     assert(ancestors.empty());
@@ -583,13 +583,14 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return state.Invalid(TxValidationResult::TX_CONFLICT, "txn-already-in-mempool");
     }
 
-    // Check for conflicts with in-memory transactions
-    for (const CTxIn &txin : tx.vin)
     {
-        const CTransaction* ptxConflicting = m_pool.GetConflictTx(txin.prevout);
-        if (ptxConflicting) {
-            if (!setConflicts.count(ptxConflicting->GetHash()))
-            {
+        const auto epoch = m_pool.GetFreshEpoch();
+        // Check for conflicts with in-memory transactions
+        for (const CTxIn &txin : tx.vin)
+        {
+            const auto ptxConflicting = m_pool.GetConflictTx(txin.prevout);
+            if (ptxConflicting) {
+                if (m_pool.already_touched(*ptxConflicting)) continue;
                 // Allow opt-out of transaction replacement by setting
                 // nSequence > MAX_BIP125_RBF_SEQUENCE (SEQUENCE_FINAL-2) on all inputs.
                 //
@@ -603,7 +604,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
                 // unconfirmed ancestors anyway; doing otherwise is hopelessly
                 // insecure.
                 bool fReplacementOptOut = true;
-                for (const CTxIn &_txin : ptxConflicting->vin)
+                for (const CTxIn &_txin : (*ptxConflicting)->GetTx().vin)
                 {
                     if (_txin.nSequence <= MAX_BIP125_RBF_SEQUENCE)
                     {
@@ -615,10 +616,10 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
                     return state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "txn-mempool-conflict");
                 }
 
-                setConflicts.insert(ptxConflicting->GetHash());
+                conflicts.emplace_back(*ptxConflicting);
             }
         }
-    }
+    } // release epoch guard
 
     LockPoints lp;
     m_view.SetBackend(m_viewmempool);
@@ -708,9 +709,8 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return state.Invalid(TxValidationResult::TX_NOT_STANDARD,
                 "absurdly-high-fee", strprintf("%d > %d", nFees, nAbsurdFee));
 
-    const CTxMemPool::setEntries setIterConflicting = m_pool.GetIterSet(setConflicts);
     // Calculate in-mempool ancestors, up to a limit.
-    if (setConflicts.size() == 1) {
+    if (conflicts.size() == 1) {
         // In general, when we receive an RBF transaction with mempool conflicts, we want to know whether we
         // would meet the chain limits after the conflicts have been removed. However, there isn't a practical
         // way to do this short of calculating the ancestor and descendant sets with an overlay cache of
@@ -738,8 +738,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         // the ancestor limits should be the same for both our new transaction and any conflicts).
         // We don't bother incrementing m_limit_descendants by the full removal count as that limit never comes
         // into force here (as we're only adding a single transaction).
-        assert(setIterConflicting.size() == 1);
-        CTxMemPool::txiter conflict = *setIterConflicting.begin();
+        CTxMemPool::txiter conflict = *conflicts.begin();
 
         m_limit_descendants += 1;
         m_limit_descendant_size += conflict->GetSizeWithDescendants();
@@ -767,21 +766,30 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         }
     }
 
+    {
+    // this is O(N) to construct here, but it beats the O(N log N) we paid earlier to make a std::set
+    // previously, and beats the O(M log M) (with O(M)) to iterate over ancestors below
+    //
+    // We create it with 1.5x the buckets needed to ensure that we get the fastest lookups, as we will throw away
+    // this memory very soon
+    std::unordered_set<CTxMemPool::txiter, SaltedTxidHasher, EqualIteratorByHash> set_conflicts{conflicts.cbegin(), conflicts.cend(), conflicts.size() + conflicts.size()/2};
+
     // A transaction that spends outputs that would be replaced by it is invalid. Now
     // that we have the set of all ancestors we can detect this
-    // pathological case by making sure setConflicts and ancestors don't
+    // pathological case by making sure conflicts and ancestors don't
     // intersect.
-    for (CTxMemPool::txiter ancestorIt : ancestors)
+    for (CTxMemPool::txiter ancestor : ancestors)
     {
-        const uint256 &hashAncestor = ancestorIt->GetTx().GetHash();
-        if (setConflicts.count(hashAncestor))
+        if (set_conflicts.count(ancestor))
         {
+            const uint256 &hashAncestor = ancestor->GetTx().GetHash();
             return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-spends-conflicting-tx",
                     strprintf("%s spends conflicting transaction %s",
                         hash.ToString(),
                         hashAncestor.ToString()));
         }
     }
+    } // release set_conflicts
 
     // Check if it's economically rational to mine this transaction rather
     // than the ones it replaces.
@@ -792,13 +800,13 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     // If we don't hold the lock all_conflicting might be incomplete; the
     // subsequent RemoveStaged() and addUnchecked() calls don't guarantee
     // mempool consistency for us.
-    fReplacementTransaction = setConflicts.size();
+    fReplacementTransaction = conflicts.size();
     if (fReplacementTransaction)
     {
         CFeeRate newFeeRate(nModifiedFees, nSize);
         std::set<uint256> setConflictsParents;
         const int maxDescendantsToVisit = 100;
-        for (const auto& mi : setIterConflicting) {
+        for (const auto& mi : conflicts) {
             // Don't allow the replacement to reduce the feerate of the
             // mempool.
             //
@@ -837,7 +845,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
             // If not too many to replace, then calculate the set of
             // transactions that would have to be evicted
             const auto epoch = m_pool.GetFreshEpoch();
-            for (CTxMemPool::txiter it : setIterConflicting) {
+            for (CTxMemPool::txiter it : conflicts) {
                 if (m_pool.already_touched(it)) continue;
                 m_pool.CalculateDescendantsVec(it, all_conflicting);
                 all_conflicting.push_back(it);

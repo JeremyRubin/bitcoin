@@ -171,3 +171,32 @@ uint64_t SipHashUint256Extra(uint64_t k0, uint64_t k1, const uint256& val, uint3
     SIPROUND;
     return v0 ^ v1 ^ v2 ^ v3;
 }
+
+#define ROTL32(x, b) (uint32_t)(((x) << (b)) | ((x) >> (32 - (b))))
+#define SIPROUND32 do { \
+    v0 += v1; v1 = ROTL32(v1, 7); v1 ^= v0; \
+    v0 = ROTL32(v0, 16); \
+    v2 += v3; v3 = ROTL32(v3, 8); v3 ^= v2; \
+    v0 += v3; v3 = ROTL32(v3, 11); v3 ^= v0; \
+    v2 += v1; v1 = ROTL32(v1, 9); v1 ^= v2; \
+    v2 = ROTL32(v2, 16); \
+} while (0)
+// see https://www.kernel.org/doc/html/latest/security/siphash.html#halfsiphash-siphash-s-insecure-younger-cousin
+uint32_t HalfSipHashUint32(uint64_t k, const uint32_t n)
+{
+    /* Specialized implementation for efficiency */
+    uint32_t v0 = 0;
+    uint32_t v1 = 0;
+    uint32_t v2 = 0x6c796765U ^ (k>>32);
+    uint32_t v3 = 0x74656462U ^ ((k<<32)>>32) ^ n;
+    SIPROUND32;
+    v0 ^= n;
+    v3 ^= 4<<24;
+    SIPROUND32;
+    v0 ^= 4<<24;
+    v2 ^= 0xff;
+    SIPROUND32;
+    SIPROUND32;
+    SIPROUND32;
+    return v1 ^ v3;
+}

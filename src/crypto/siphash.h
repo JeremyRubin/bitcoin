@@ -44,4 +44,8 @@ public:
 uint64_t SipHashUint256(uint64_t k0, uint64_t k1, const uint256& val);
 uint64_t SipHashUint256Extra(uint64_t k0, uint64_t k1, const uint256& val, uint32_t extra);
 
+// Specialized SipHash cousin for hashmaps using 32-bit keys that want Dos resistance
+// see https://www.kernel.org/doc/html/latest/security/siphash.html#halfsiphash-siphash-s-insecure-younger-cousin
+uint32_t HalfSipHashUint32(uint64_t k, const uint32_t n);
+
 #endif // BITCOIN_CRYPTO_SIPHASH_H
