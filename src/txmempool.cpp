@@ -66,7 +66,7 @@ void CTxMemPool::UpdateForDescendants(txiter updateIt, cacheMap &cachedDescendan
         const txiter cit = *stageEntries.begin();
         setAllDescendants.insert(cit);
         stageEntries.erase(cit);
-        const setEntries &setChildren = GetMemPoolChildren(cit);
+        const CTxMemPoolEntry::Children &setChildren = cit->GetMemPoolChildrenConst();
         for (txiter childEntry : setChildren) {
             cacheMap::iterator cacheIt = cachedDescendants.find(childEntry);
             if (cacheIt != cachedDescendants.end()) {
@@ -151,7 +151,7 @@ void CTxMemPool::UpdateTransactionsFromBlock(const std::vector<uint256> &vHashes
 
 bool CTxMemPool::CalculateMemPoolAncestors(const CTxMemPoolEntry &entry, setEntries &setAncestors, uint64_t limitAncestorCount, uint64_t limitAncestorSize, uint64_t limitDescendantCount, uint64_t limitDescendantSize, std::string &errString, bool fSearchForParents /* = true */) const
 {
-    setEntries parentHashes;
+    CTxMemPoolEntry::Parents parentHashes;
     const CTransaction &tx = entry.GetTx();
 
     if (fSearchForParents) {
@@ -161,7 +161,7 @@ bool CTxMemPool::CalculateMemPoolAncestors(const CTxMemPoolEntry &entry, setEntr
         for (unsigned int i = 0; i < tx.vin.size(); i++) {
             Optional<txiter> piter = GetIter(tx.vin[i].prevout.hash);
             if (piter) {
-                parentHashes.insert(*piter);
+                parentHashes.insert(**piter);
                 if (parentHashes.size() + 1 > limitAncestorCount) {
                     errString = strprintf("too many unconfirmed parents [limit: %u]", limitAncestorCount);
                     return false;
@@ -172,16 +172,17 @@ bool CTxMemPool::CalculateMemPoolAncestors(const CTxMemPoolEntry &entry, setEntr
         // If we're not searching for parents, we require this to be an
         // entry in the mempool already.
         txiter it = mapTx.iterator_to(entry);
-        parentHashes = GetMemPoolParents(it);
+        parentHashes = it->GetMemPoolParentsConst();
     }
 
     size_t totalSizeWithAncestors = entry.GetTxSize();
 
     while (!parentHashes.empty()) {
-        txiter stageit = *parentHashes.begin();
+        const CTxMemPoolEntry& stage = parentHashes.begin()->get();
+        txiter stageit = mapTx.iterator_to(stage);
 
         setAncestors.insert(stageit);
-        parentHashes.erase(stageit);
+        parentHashes.erase(stage);
         totalSizeWithAncestors += stageit->GetTxSize();
 
         if (stageit->GetSizeWithDescendants() + entry.GetTxSize() > limitDescendantSize) {
@@ -195,11 +196,13 @@ bool CTxMemPool::CalculateMemPoolAncestors(const CTxMemPoolEntry &entry, setEntr
             return false;
         }
 
-        const setEntries & setMemPoolParents = GetMemPoolParents(stageit);
-        for (txiter phash : setMemPoolParents) {
+        const CTxMemPoolEntry::Parents & setMemPoolParents = stageit->GetMemPoolParentsConst();
+        for (const CTxMemPoolEntry& hash : setMemPoolParents) {
+            txiter phash = mapTx.iterator_to(hash);
+
             // If this is a new ancestor, add it.
             if (setAncestors.count(phash) == 0) {
-                parentHashes.insert(phash);
+                parentHashes.insert(hash);
             }
             if (parentHashes.size() + setAncestors.size() + 1 > limitAncestorCount) {
                 errString = strprintf("too many unconfirmed ancestors [limit: %u]", limitAncestorCount);
@@ -213,10 +216,10 @@ bool CTxMemPool::CalculateMemPoolAncestors(const CTxMemPoolEntry &entry, setEntr
 
 void CTxMemPool::UpdateAncestorsOf(bool add, txiter it, setEntries &setAncestors)
 {
-    setEntries parentIters = GetMemPoolParents(it);
+    CTxMemPoolEntry::Parents parentIters = it->GetMemPoolParents();
     // add or remove this tx as a child of each parent
-    for (txiter piter : parentIters) {
-        UpdateChild(piter, it, add);
+    for (const CTxMemPoolEntry& parent : parentIters) {
+        UpdateChild(mapTx.iterator_to(parent), it, add);
     }
     const int64_t updateCount = (add ? 1 : -1);
     const int64_t updateSize = updateCount * it->GetTxSize();
@@ -242,9 +245,9 @@ void CTxMemPool::UpdateEntryForAncestors(txiter it, const setEntries &setAncesto
 
 void CTxMemPool::UpdateChildrenForRemoval(txiter it)
 {
-    const setEntries &setMemPoolChildren = GetMemPoolChildren(it);
-    for (txiter updateIt : setMemPoolChildren) {
-        UpdateParent(updateIt, it, false);
+    const CTxMemPoolEntry::Children &setMemPoolChildren = it->GetMemPoolChildrenConst();
+    for (const CTxMemPoolEntry& updateIt : setMemPoolChildren) {
+        UpdateParent(mapTx.iterator_to(updateIt), it, false);
     }
 }
 
@@ -455,8 +458,9 @@ void CTxMemPool::CalculateDescendants(txiter entryit, setEntries& setDescendants
         setDescendants.insert(it);
         stage.erase(it);
 
-        const setEntries &setChildren = GetMemPoolChildren(it);
-        for (txiter childiter : setChildren) {
+        const CTxMemPoolEntry::Children &setChildren = it->GetMemPoolChildrenConst();
+        for (const CTxMemPoolEntry& child : setChildren) {
+            txiter childiter = mapTx.iterator_to(child);
             if (!setDescendants.count(childiter)) {
                 stage.insert(childiter);
             }
@@ -632,7 +636,7 @@ void CTxMemPool::check(const CCoinsViewCache *pcoins) const
         const CTransaction& tx = it->GetTx();
         innerUsage += memusage::DynamicUsage(it->GetMemPoolParentsConst()) + memusage::DynamicUsage(it->GetMemPoolChildrenConst());
         bool fDependsWait = false;
-        setEntries setParentCheck;
+        CTxMemPoolEntry::Parents setParentCheck;
         for (const CTxIn &txin : tx.vin) {
             // Check that every mempool transaction's inputs refer to available coins, or other mempool tx's.
             indexed_transaction_set::const_iterator it2 = mapTx.find(txin.prevout.hash);
@@ -640,7 +644,7 @@ void CTxMemPool::check(const CCoinsViewCache *pcoins) const
                 const CTransaction& tx2 = it2->GetTx();
                 assert(tx2.vout.size() > txin.prevout.n && !tx2.vout[txin.prevout.n].IsNull());
                 fDependsWait = true;
-                setParentCheck.insert(it2);
+                setParentCheck.insert(*it2);
             } else {
                 assert(pcoins->HaveCoin(txin.prevout));
             }
@@ -651,7 +655,11 @@ void CTxMemPool::check(const CCoinsViewCache *pcoins) const
             assert(it3->second == &tx);
             i++;
         }
-        assert(setParentCheck == GetMemPoolParents(it));
+        auto comp = [](const CTxMemPoolEntry& a, const CTxMemPoolEntry& b) -> bool {
+            return a.GetTx().GetHash() == b.GetTx().GetHash();
+        };
+        assert(setParentCheck.size() == it->GetMemPoolParentsConst().size());
+        assert(std::equal(setParentCheck.begin(), setParentCheck.end(), it->GetMemPoolParentsConst().begin(), comp));
         // Verify ancestor state is correct.
         setEntries setAncestors;
         uint64_t nNoLimit = std::numeric_limits<uint64_t>::max();
@@ -674,17 +682,18 @@ void CTxMemPool::check(const CCoinsViewCache *pcoins) const
         assert(it->GetModFeesWithAncestors() == nFeesCheck);
 
         // Check children against mapNextTx
-        CTxMemPool::setEntries setChildrenCheck;
+        CTxMemPoolEntry::Children setChildrenCheck;
         auto iter = mapNextTx.lower_bound(COutPoint(it->GetTx().GetHash(), 0));
         uint64_t child_sizes = 0;
         for (; iter != mapNextTx.end() && iter->first->hash == it->GetTx().GetHash(); ++iter) {
             txiter childit = mapTx.find(iter->second->GetHash());
             assert(childit != mapTx.end()); // mapNextTx points to in-mempool transactions
-            if (setChildrenCheck.insert(childit).second) {
+            if (setChildrenCheck.insert(*childit).second) {
                 child_sizes += childit->GetTxSize();
             }
         }
-        assert(setChildrenCheck == GetMemPoolChildren(it));
+        assert(setChildrenCheck.size() == it->GetMemPoolChildrenConst().size());
+        assert(std::equal(setChildrenCheck.begin(), setChildrenCheck.end(), it->GetMemPoolChildrenConst().begin(), comp));
         // Also check to make sure size is greater than sum with immediate children.
         // just a sanity check, not definitive that this calc is correct...
         assert(it->GetSizeWithDescendants() >= child_sizes + it->GetTxSize());
@@ -952,9 +961,9 @@ void CTxMemPool::addUnchecked(const CTxMemPoolEntry &entry, bool validFeeEstimat
 void CTxMemPool::UpdateChild(txiter entry, txiter child, bool add)
 {
     CTxMemPoolEntry::Children s;
-    if (add && entry->GetMemPoolChildren().insert(child).second) {
+    if (add && entry->GetMemPoolChildren().insert(*child).second) {
         cachedInnerUsage += memusage::IncrementalDynamicUsage(s);
-    } else if (!add && entry->GetMemPoolChildren().erase(child)) {
+    } else if (!add && entry->GetMemPoolChildren().erase(*child)) {
         cachedInnerUsage -= memusage::IncrementalDynamicUsage(s);
     }
 }
@@ -962,20 +971,20 @@ void CTxMemPool::UpdateChild(txiter entry, txiter child, bool add)
 void CTxMemPool::UpdateParent(txiter entry, txiter parent, bool add)
 {
     CTxMemPoolEntry::Parents s;
-    if (add && entry->GetMemPoolParents().insert(parent).second) {
+    if (add && entry->GetMemPoolParents().insert(*parent).second) {
         cachedInnerUsage += memusage::IncrementalDynamicUsage(s);
-    } else if (!add && entry->GetMemPoolParents().erase(parent)) {
+    } else if (!add && entry->GetMemPoolParents().erase(*parent)) {
         cachedInnerUsage -= memusage::IncrementalDynamicUsage(s);
     }
 }
 
-const CTxMemPoolEntry::parents & CTxMemPool::GetMemPoolParents(txiter entry) const
+const CTxMemPoolEntry::Parents & CTxMemPool::GetMemPoolParents(txiter entry) const
 {
     assert(entry != mapTx.end());
     return entry->GetMemPoolParentsConst();
 }
 
-const CTxMemPoolEntry::children & CTxMemPool::GetMemPoolChildren(txiter entry) const
+const CTxMemPoolEntry::Children & CTxMemPool::GetMemPoolChildren(txiter entry) const
 {
     assert(entry != mapTx.end());
     return entry->GetMemPoolChildrenConst();
@@ -1066,12 +1075,12 @@ uint64_t CTxMemPool::CalculateDescendantMaximum(txiter entry) const {
         txiter candidate = candidates.back();
         candidates.pop_back();
         if (!counted.insert(candidate).second) continue;
-        const setEntries& parents = GetMemPoolParents(candidate);
+        const CTxMemPoolEntry::Parents& parents = candidate->GetMemPoolParentsConst();
         if (parents.size() == 0) {
             maximum = std::max(maximum, candidate->GetCountWithDescendants());
         } else {
-            for (txiter i : parents) {
-                candidates.push_back(i);
+            for (const CTxMemPoolEntry& i : parents) {
+                candidates.push_back(mapTx.iterator_to(i));
             }
         }
     }
