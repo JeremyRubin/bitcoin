@@ -173,6 +173,7 @@ BASE_SCRIPTS = [
     'rpc_signmessage.py',
     'wallet_balance.py',
     'feature_nulldummy.py',
+    'feature_checktemplateverify.py',
     'mempool_accept.py',
     'wallet_import_rescan.py',
     'wallet_import_with_label.py',
