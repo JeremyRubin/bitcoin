@@ -530,12 +530,12 @@ public:
         }
     };
     typedef std::set<txiter, CompareIteratorByHash> setEntries;
+    typedef std::vector<txiter> vecEntries;
 
     const setEntries & GetMemPoolParents(txiter entry) const EXCLUSIVE_LOCKS_REQUIRED(cs);
     const setEntries & GetMemPoolChildren(txiter entry) const EXCLUSIVE_LOCKS_REQUIRED(cs);
     uint64_t CalculateDescendantMaximum(txiter entry) const EXCLUSIVE_LOCKS_REQUIRED(cs);
 private:
-    typedef std::map<txiter, setEntries, CompareIteratorByHash> cacheMap;
 
     struct TxLinks {
         setEntries parents;
@@ -717,7 +717,6 @@ private:
      *  same transaction again, if encountered in another transaction chain.
      */
     void UpdateForDescendants(txiter updateIt,
-            cacheMap &cachedDescendants,
             const std::set<uint256> &setExclude) EXCLUSIVE_LOCKS_REQUIRED(cs);
     /** Update ancestors of hash to add/remove it as a descendant transaction. */
     void UpdateAncestorsOf(bool add, txiter hash, setEntries &setAncestors) EXCLUSIVE_LOCKS_REQUIRED(cs);
