@@ -961,7 +961,7 @@ void CTxMemPool::addUnchecked(const CTxMemPoolEntry &entry, bool validFeeEstimat
 void CTxMemPool::UpdateChild(txiter entry, txiter child, bool add)
 {
     CTxMemPoolEntry::Children s;
-    if (add && entry->().insert(*child).second) {
+    if (add && entry->GetMemPoolChildren().insert(*child).second) {
         cachedInnerUsage += memusage::IncrementalDynamicUsage(s);
     } else if (!add && entry->GetMemPoolChildren().erase(*child)) {
         cachedInnerUsage -= memusage::IncrementalDynamicUsage(s);
