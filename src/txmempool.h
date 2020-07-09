@@ -551,7 +551,7 @@ public:
 
     uint64_t CalculateDescendantMaximum(txiter entry) const EXCLUSIVE_LOCKS_REQUIRED(cs);
 private:
-    typedef std::map<txiter, setEntries, CompareIteratorByHash> cacheMap;
+    typedef std::map<txiter, setEntries, CompareIteratorByHashGeneric> cacheMap;
 
 
     void UpdateParent(txiter entry, txiter parent, bool add);
