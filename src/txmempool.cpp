@@ -59,21 +59,21 @@ size_t CTxMemPoolEntry::GetTxSize() const
 // descendants.
 void CTxMemPool::UpdateForDescendants(txiter updateIt, cacheMap &cachedDescendants, const std::set<uint256> &setExclude)
 {
-    setEntries stageEntries, setAllDescendants;
-    stageEntries = GetMemPoolChildren(updateIt);
+    CTxMemPoolEntry::Children stageEntries, setAllDescendants;
+    stageEntries = updateIt->GetMemPoolChildrenConst();
 
     while (!stageEntries.empty()) {
-        const txiter cit = *stageEntries.begin();
+        const CTxMemPoolEntry& cit = *stageEntries.begin();
         setAllDescendants.insert(cit);
         stageEntries.erase(cit);
-        const CTxMemPoolEntry::Children &setChildren = cit->GetMemPoolChildrenConst();
-        for (txiter childEntry : setChildren) {
-            cacheMap::iterator cacheIt = cachedDescendants.find(childEntry);
+        const CTxMemPoolEntry::Children &setChildren = cit.GetMemPoolChildrenConst();
+        for (const CTxMemPoolEntry& childEntry : setChildren) {
+            cacheMap::iterator cacheIt = cachedDescendants.find(mapTx.iterator_to(childEntry));
             if (cacheIt != cachedDescendants.end()) {
                 // We've already calculated this one, just add the entries for this set
                 // but don't traverse again.
                 for (txiter cacheEntry : cacheIt->second) {
-                    setAllDescendants.insert(cacheEntry);
+                    setAllDescendants.insert(*cacheEntry);
                 }
             } else if (!setAllDescendants.count(childEntry)) {
                 // Schedule for later processing
@@ -86,14 +86,14 @@ void CTxMemPool::UpdateForDescendants(txiter updateIt, cacheMap &cachedDescendan
     int64_t modifySize = 0;
     CAmount modifyFee = 0;
     int64_t modifyCount = 0;
-    for (txiter cit : setAllDescendants) {
-        if (!setExclude.count(cit->GetTx().GetHash())) {
-            modifySize += cit->GetTxSize();
-            modifyFee += cit->GetModifiedFee();
+    for (const CTxMemPoolEntry& cit : setAllDescendants) {
+        if (!setExclude.count(cit.GetTx().GetHash())) {
+            modifySize += cit.GetTxSize();
+            modifyFee += cit.GetModifiedFee();
             modifyCount++;
-            cachedDescendants[updateIt].insert(cit);
+            cachedDescendants[updateIt].insert(mapTx.iterator_to(cit));
             // Update ancestor state for each descendant
-            mapTx.modify(cit, update_ancestor_state(updateIt->GetTxSize(), updateIt->GetModifiedFee(), 1, updateIt->GetSigOpCost()));
+            mapTx.modify(mapTx.iterator_to(cit), update_ancestor_state(updateIt->GetTxSize(), updateIt->GetModifiedFee(), 1, updateIt->GetSigOpCost()));
         }
     }
     mapTx.modify(updateIt, update_descendant_state(modifySize, modifyFee, modifyCount));
@@ -961,7 +961,7 @@ void CTxMemPool::addUnchecked(const CTxMemPoolEntry &entry, bool validFeeEstimat
 void CTxMemPool::UpdateChild(txiter entry, txiter child, bool add)
 {
     CTxMemPoolEntry::Children s;
-    if (add && entry->GetMemPoolChildren().insert(*child).second) {
+    if (add && entry->().insert(*child).second) {
         cachedInnerUsage += memusage::IncrementalDynamicUsage(s);
     } else if (!add && entry->GetMemPoolChildren().erase(*child)) {
         cachedInnerUsage -= memusage::IncrementalDynamicUsage(s);
