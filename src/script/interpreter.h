@@ -185,8 +185,6 @@ struct PrecomputedTransactionData
 
 /* Standard Template Hash Declarations */
 template<typename TxType>
-uint256 GetStandardTemplateHash(const TxType& tx, uint32_t input_index);
-template<typename TxType>
 uint256 GetStandardTemplateHash(const TxType& tx, const uint256& outputs_hash, const uint256& sequences_hash,
                                 const uint32_t input_index);
 
