@@ -37,6 +37,13 @@
 #include <optional>
 #include <thread>
 #include <vector>
+#include <condition_variable>
+#include <forward_list>
+
+#ifndef WIN32
+#include <arpa/inet.h>
+#endif
+
 
 class CScheduler;
 class CNode;
@@ -414,7 +421,8 @@ public:
     Mutex cs_vRecv;
 
     RecursiveMutex cs_vProcessMsg;
-    std::list<CNetMessage> vProcessMsg GUARDED_BY(cs_vProcessMsg);
+    std::forward_list<CNetMessage> vProcessMsg GUARDED_BY(cs_vProcessMsg);
+    std::forward_list<CNetMessage>::iterator m_process_msg_most_recent GUARDED_BY(cs_vProcessMsg);
     size_t nProcessQueueSize{0};
 
     RecursiveMutex cs_sendProcessing;
@@ -693,7 +701,8 @@ private:
     //! service advertisements.
     const ServiceFlags nLocalServices;
 
-    std::list<CNetMessage> vRecvMsg;  // Used only by SocketHandler thread
+    std::forward_list<CNetMessage> vRecvMsg;  // Used only by SocketHandler thread
+    std::forward_list<CNetMessage>::iterator m_recv_msg_most_recent;
 
     mutable RecursiveMutex cs_addrName;
     std::string addrName GUARDED_BY(cs_addrName);
