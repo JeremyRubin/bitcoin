@@ -75,13 +75,21 @@ public:
         return u;
     }
 };
-
+template <typename T>
 struct BlockHasher
 {
     // this used to call `GetCheapHash()` in uint256, which was later moved; the
     // cheap hash function simply calls ReadLE64() however, so the end result is
     // identical
-    size_t operator()(const uint256& hash) const { return ReadLE64(hash.begin()); }
+    mutable T mock;
+    BlockHasher() : mock() {};
+    size_t operator()(T* const& ptr) const { return ReadLE64(ptr->GetBlockHash().begin()); }
+    // Helper for querying by hash
+    // e.g., map.find(map.hash_function()(h))
+    T* operator()(const uint256& hash) {
+        mock.m_hash_block = hash;
+        return &mock;
+    }
 };
 
 class SaltedSipHasher

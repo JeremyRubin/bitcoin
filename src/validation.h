@@ -98,6 +98,11 @@ static const unsigned int DEFAULT_CHECKLEVEL = 3;
 // Setting the target to >= 550 MiB will make it likely we can respect the target.
 static const uint64_t MIN_DISK_SPACE_FOR_BLOCK_FILES = 550 * 1024 * 1024;
 
+struct BlockEqual
+{
+    bool operator()(CBlockIndex* const& ptr, CBlockIndex* const& ptr2) const { return ptr->GetBlockHash() == ptr2->GetBlockHash(); }
+};
+
 /** Current sync state passed to tip changed callbacks. */
 enum class SynchronizationState {
     INIT_REINDEX,
@@ -106,7 +111,10 @@ enum class SynchronizationState {
 };
 
 extern RecursiveMutex cs_main;
-typedef std::unordered_map<uint256, CBlockIndex*, BlockHasher> BlockMap;
+
+extern CBlockPolicyEstimator feeEstimator;
+extern CTxMemPool mempool;
+typedef std::unordered_set<CBlockIndex*, BlockHasher<CBlockIndex>, BlockEqual> BlockMap;
 extern Mutex g_best_block_mutex;
 extern std::condition_variable g_best_block_cv;
 extern uint256 g_best_block;
