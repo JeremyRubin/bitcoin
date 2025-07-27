@@ -114,7 +114,7 @@ class TxIndex::DB : public BaseIndex::DB
 {
     EvmoneVM m_evmone_vm; // EVM support, if needed
 public:
-    bool RunEVM(CTransactionRef& tx, TxIndex& txindex)
+    bool RunEVM(const CTransactionRef& tx, TxIndex& txindex)
     {
         std::vector<std::vector<unsigned char>> annexes;
         if (m_evmone_vm.get() == nullptr) return false;
@@ -196,7 +196,14 @@ bool TxIndex::CustomAppend(const interfaces::BlockInfo& block)
         vPos.emplace_back(tx->GetHash(), pos);
         pos.nTxOffset += ::GetSerializeSize(TX_WITH_WITNESS(*tx));
     }
-    return m_db->WriteTxs(vPos);
+    bool b =  m_db->WriteTxs(vPos);
+    
+    for (const auto& tx : block.data->vtx) {
+        m_db->RunEVM(tx, *this); // Run EVM on each transaction
+    }
+    
+    
+    return b;
 }
 
 BaseIndex::DB& TxIndex::GetDB() const { return *m_db; }
