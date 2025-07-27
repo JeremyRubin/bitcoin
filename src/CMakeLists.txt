@@ -8,6 +8,32 @@ configure_file(${PROJECT_SOURCE_DIR}/cmake/bitcoin-build-config.h.in bitcoin-bui
 include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 
 #=============================
+option(WITH_EXTERNAL_EVM "Link to a pre-built evmone library" OFF)
+set(EVMONE_INCLUDE_DIR "" CACHE PATH "Path to evmone include directory")
+set(EVMONE_LIBRARY "" CACHE FILEPATH "Path to pre-built evmone library")
+set(EVMC_INCLUDE_DIR "" CACHE PATH "Path to evmc include directory (required by evmone)")
+
+if(WITH_EXTERNAL_EVM)
+  if(NOT EVMONE_INCLUDE_DIR OR NOT EVMONE_LIBRARY)
+    message(FATAL_ERROR "WITH_EXTERNAL_EVM is ON but EVMONE_INCLUDE_DIR or EVMONE_LIBRARY is not set.")
+  endif()
+  get_filename_component(EVMONE_LIB_EXT "${EVMONE_LIBRARY}" EXT)
+  if(EVMONE_LIB_EXT STREQUAL ".a")
+    add_library(evmone STATIC IMPORTED)
+  elseif(EVMONE_LIB_EXT STREQUAL ".so" OR EVMONE_LIB_EXT STREQUAL ".dylib" OR EVMONE_LIB_EXT STREQUAL ".dll")
+    add_library(evmone SHARED IMPORTED)
+  else()
+    message(FATAL_ERROR "EVMONE_LIBRARY must be a .a, .so, .dylib, or .dll file")
+  endif()
+  set(_evmone_includes "${EVMONE_INCLUDE_DIR}")
+  if(EVMC_INCLUDE_DIR)
+    list(APPEND _evmone_includes "${EVMC_INCLUDE_DIR}")
+  endif()
+  set_target_properties(evmone PROPERTIES
+    IMPORTED_LOCATION "${EVMONE_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${_evmone_includes}"
+  )
+endif()
 # Subprojects
 #=============================
 # Subprojects include subdirectories that do or could have tests
@@ -330,6 +356,7 @@ target_link_libraries(bitcoin_node
     $<TARGET_NAME_IF_EXISTS:libevent::extra>
     $<TARGET_NAME_IF_EXISTS:libevent::pthreads>
     $<TARGET_NAME_IF_EXISTS:USDT::headers>
+    $<$<BOOL:${WITH_EXTERNAL_EVM}>:evmone>
 )
 
 # Bitcoin wrapper executable that can call other executables.
