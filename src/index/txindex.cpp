@@ -54,33 +54,39 @@ public:
 
         auto kind = EVMC_CALL; // Assuming we are executing a call
         uint32_t flags = 0;
-        DataStream input_stream{input};
-        input_stream >> flags; // Read flags from input
-                               //
+        //
         auto depth = 0;
         int64_t gas = gas_in_out;
         evmc_address recipient;
         evmc_address sender;
-        input_stream >> recipient.bytes; // Read recipient address
-        input_stream >> sender.bytes;    // Read sender address
 
 
         std::vector<unsigned char> input_data;
-        input_stream >> input_data; // Read input data
         size_t input_size = input_data.size();
 
         evmc_bytes32 value{};
-        input_stream >> value.bytes; // Read value, if applicable
 
         evmc_bytes32 salt{};
-        input_stream >> salt.bytes; // Read salt, if applicable
-
         evmc_address code_address;
-        input_stream >> code_address.bytes; // Read code address, if applicable
 
         std::vector<unsigned char> code;
-        input_stream >> code; // Read code, if applicable
         size_t code_size = code.size();
+
+        DataStream input_stream{input};
+        try {
+            input_stream >> flags;           // Read flags from input
+            input_stream >> recipient.bytes; // Read recipient address
+            input_stream >> sender.bytes;    // Read sender address
+            input_stream >> input_data;      // Read input data
+            input_stream >> value.bytes;     // Read value, if applicable
+            input_stream >> salt.bytes;      // Read salt, if applicable
+
+            input_stream >> code_address.bytes; // Read code address, if applicable
+            input_stream >> code;               // Read code, if applicable
+        } catch (const std::exception& e) {
+            LogPrintf("Error reading input data: %s\n", e.what());
+            return;
+        }
         evmc_message msg{kind, flags,
                          depth, gas, recipient, sender,
                          input_data.data(), input_size, value,
