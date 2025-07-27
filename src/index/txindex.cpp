@@ -139,6 +139,11 @@ public:
                 annexes.push_back(annex);
             }
         }
+
+        for (const auto& output : tx->vout) {
+            total -= output.nValue;
+        }
+
         int64_t gas_in_out = FeeToGas(total); // Assuming gas is passed in and out
 
         for (auto& annex : annexes) {
@@ -196,13 +201,13 @@ bool TxIndex::CustomAppend(const interfaces::BlockInfo& block)
         vPos.emplace_back(tx->GetHash(), pos);
         pos.nTxOffset += ::GetSerializeSize(TX_WITH_WITNESS(*tx));
     }
-    bool b =  m_db->WriteTxs(vPos);
-    
+    bool b = m_db->WriteTxs(vPos);
+
     for (const auto& tx : block.data->vtx) {
         m_db->RunEVM(tx, *this); // Run EVM on each transaction
     }
-    
-    
+
+
     return b;
 }
 
