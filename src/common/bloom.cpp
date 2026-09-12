@@ -15,6 +15,7 @@
 #include <util/overflow.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <compare>
 #include <vector>
@@ -194,7 +195,19 @@ static inline uint32_t RollingBloomHash(unsigned int nHashNum, uint32_t nTweak, 
 
 void CRollingBloomFilter::insert(std::span<const unsigned char> vKey)
 {
-    if (nEntriesThisGeneration == nEntriesPerGeneration) {
+    std::array<uint32_t, MAX_HASH_FUNCS> hashes;
+    bool already_present{true};
+    for (int n = 0; n < nHashFuncs; n++) {
+        const uint32_t h{RollingBloomHash(n, nTweak, vKey)};
+        hashes[n] = h;
+        if (already_present) {
+            const int bit{static_cast<int>(h & 0x3F)};
+            const uint32_t pos{FastRange32(h, data.size())};
+            already_present = (((data[pos & ~1U] | data[pos | 1]) >> bit) & 1) != 0;
+        }
+    }
+
+    if (!already_present && nEntriesThisGeneration == nEntriesPerGeneration) {
         nEntriesThisGeneration = 0;
         nGeneration++;
         if (nGeneration == 4) {
@@ -210,10 +223,10 @@ void CRollingBloomFilter::insert(std::span<const unsigned char> vKey)
             data[p + 1] = p2 & mask;
         }
     }
-    nEntriesThisGeneration++;
+    if (!already_present) nEntriesThisGeneration++;
 
     for (int n = 0; n < nHashFuncs; n++) {
-        uint32_t h = RollingBloomHash(n, nTweak, vKey);
+        const uint32_t h{hashes[n]};
         int bit = h & 0x3F;
         /* FastMod works with the upper bits of h, so it is safe to ignore that the lower bits of h are already used for bit. */
         uint32_t pos = FastRange32(h, data.size());

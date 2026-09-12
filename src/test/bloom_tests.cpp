@@ -491,7 +491,7 @@ BOOST_AUTO_TEST_CASE(rolling_bloom)
             ++nHits;
     }
     // Expect about 100 hits
-    BOOST_CHECK_EQUAL(nHits, 71U);
+    BOOST_CHECK_EQUAL(nHits, 69U);
 
     BOOST_CHECK(rb1.contains(data[DATASIZE-1]));
     rb1.reset();
@@ -530,6 +530,51 @@ BOOST_AUTO_TEST_CASE(rolling_bloom)
     for (int i = 0; i < DATASIZE; i++) {
         BOOST_CHECK(rb2.contains(data[i]));
     }
+}
+
+BOOST_AUTO_TEST_CASE(rolling_bloom_repeated_insert)
+{
+    SeedRandomForTest(SeedRand::ZEROS);
+
+    CRollingBloomFilter filter(100, 0.000001);
+    const std::vector protected_items{
+        RandomData(),
+        RandomData(),
+        RandomData(),
+    };
+    const auto repeated_item{RandomData()};
+    for (const auto& item : protected_items) {
+        filter.insert(item);
+    }
+    // Repeating one item across three nominal generations must not expire
+    // unrelated entries.
+    for (int i = 0; i < 150; ++i) {
+        filter.insert(repeated_item);
+    }
+    for (const auto& item : protected_items) {
+        BOOST_CHECK(filter.contains(item));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(rolling_bloom_reinsert_refreshes)
+{
+    SeedRandomForTest(SeedRand::ZEROS);
+
+    CRollingBloomFilter filter(100, 0.000001);
+    const auto repeated_item{RandomData()};
+    filter.insert(repeated_item);
+
+    // Move to generation two and refresh the item there.
+    for (int i = 0; i < 50; ++i) {
+        filter.insert(RandomData());
+    }
+    filter.insert(repeated_item);
+
+    // Rotate back to generation one, wiping the item's original bits.
+    for (int i = 0; i < 100; ++i) {
+        filter.insert(RandomData());
+    }
+    BOOST_CHECK(filter.contains(repeated_item));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
